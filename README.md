@@ -58,7 +58,7 @@ Training resumes automatically after an interruption (finished folds are skipped
 ## Model weights
 Download[https://drive.google.com/drive/folders/1jKTrA_2qV7NN1Khl9IxmUgFCs5j7rTBy?usp=drive_link]
 
-Place the files (`pipeline_config.json`, `model_effv2s_fold0..4.pt`) in `./outputs` and run `inference.py`.
+Download and Place the file (`model_effv2s_fold0..4.pt`) in `./outputs` and run `inference.py`.
 
 ## Submission format
 `submission.csv` has exactly 2,000 rows plus the header `image_id,label`, labels in {0, 1}, no nulls (validated in `make_submission`).
