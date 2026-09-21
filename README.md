@@ -3,8 +3,6 @@
 Binary classification of 256x256 grayscale lunar crops: **Class 0 = Depth** (craters, holes) and **Class 1 = Rise** (mounds, boulders).
 Metric: **balanced accuracy**.
 
-> **Results** (fill in after running `train.py`): 5-fold out-of-fold balanced accuracy = `____`  |  public leaderboard = `____`
-
 ## Why it is hard - and how the sun azimuth is used
 
 A crater lit from the left and a mound lit from the right produce the *same* picture. Without knowing where the sun is, the two
@@ -58,7 +56,7 @@ Useful flags: `--mode {auto,spec,opp,dual,routed}`, `--img_size 384`, `--epochs`
 Training resumes automatically after an interruption (finished folds are skipped).
 
 ## Model weights
-Download (Anyone with the link can view): **<PASTE GOOGLE DRIVE / HUGGING FACE / KAGGLE LINK HERE>**
+Download (Anyone with the link can view)[https://drive.google.com/drive/folders/1jKTrA_2qV7NN1Khl9IxmUgFCs5j7rTBy?usp=drive_link]
 Place the files (`pipeline_config.json`, `model_effv2s_fold0..4.pt`) in `./outputs` and run `inference.py`.
 
 ## Submission format
