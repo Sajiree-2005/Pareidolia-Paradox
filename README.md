@@ -1,96 +1,65 @@
-# 🌕 Pareidolia Paradox — Lunar Surface Depth/Rise Classifier
+# The Pareidolia Paradox - lunar crater (Depth) vs mound (Rise) classification
 
-A deep learning pipeline that classifies 256×256 grayscale lunar surface crops as
-either a **depression** (crater, hole) or a **protrusion** (mound, hill, boulder) —
-a classic case of *pareidolia*, where the same 2D shading pattern can look either
-concave or convex depending on where the light is coming from.
+Binary classification of 256x256 grayscale lunar crops: **Class 0 = Depth** (craters, holes) and **Class 1 = Rise** (mounds, boulders).
+Metric: **balanced accuracy**.
 
-This repo was built for a computer-vision hackathon, but the approach — physics-aware
-preprocessing, transfer learning, cross-validation, and test-time augmentation — is a
-general template for any binary image classification problem with a known confound
-(here, lighting direction) that needs to be normalized out before training.
+> **Results** (fill in after running `train.py`): 5-fold out-of-fold balanced accuracy = `____`  |  public leaderboard = `____`
 
-## The problem
+## Why it is hard - and how the sun azimuth is used
 
-Craters and boulders can look identical in a single 2D image: a crater lit from the
-left casts a shadow on its right side, and a boulder lit from the right casts a shadow
-on its left — the shading pattern is nearly indistinguishable. Human vision (and naive
-CNNs) resolve this ambiguity using an implicit assumption about where the light is
-coming from. If that assumption doesn't hold for a given image, the shape reads as
-"inside-out."
+A crater lit from the left and a mound lit from the right produce the *same* picture. Without knowing where the sun is, the two
+classes are indistinguishable (pareidolia). The metadata column `sun_azimuth_angle` resolves the ambiguity, so **every image is
+rotated counter-clockwise by `-sun_azimuth_angle` before training and inference** (`physics.rotate_ccw`; reflect-padded to the
+image diagonal, rotated, centre-cropped, so no black corners leak information). After this step the sun always comes from the
+same direction, and "bright on the sun side => mound, bright on the far side => crater" becomes a rule the CNN can learn.
 
-Each image in this dataset comes with a `sun_azimuth_angle` — the direction of the
-light source at capture time. The key idea is to **rotate every image so the sun
-direction is standardized before the model ever sees it**, removing the ambiguity
-instead of asking the model to learn around it.
+### Verifying the rotation instead of trusting it
+We do not assume the convention silently; `physics.discover_physics` measures it on the training set:
 
-## Approach
+1. For each image we compute a *brightness-dipole vector* (high-passed, Gaussian-windowed first moment). It points toward the bright
+   side of the object: along the sun for a mound, away from the sun for a crater.
+2. Using the labels, we fit `light_angle = phi0 + a * azimuth` for `a in {-2..2}`.
+   `a = +1` means the competition rule ("rotate CCW by -az") is right, `a = -1` means the opposite sign, and a strong fit for **both**
+   signs means the data mixes two conventions.
+3. Candidate input representations are compared with a short, identical pilot run (small EfficientNet-B0, same split):
+   * `spec`   - rotate by `-az` (competition rule)
+   * `opp`    - rotate by `+az`
+   * `dual`   - channels `[spec, opp, raw]`, the network decides
+   * `routed` - per image, choose `spec` or `opp` from that image's own shading axis (label-free, so it also works on test data)
+   
+   The winner is stored in `pipeline_config.json` and used identically by `train.py` and `inference.py`.
+4. Each mode also adds a constant rotation so the light arrives from angle 0 (from the right). A vertical (top<->bottom) flip then keeps
+   the light direction, so it is a label-preserving augmentation/TTA. It is enabled only when the probe shows a strong, consistent fit. No 90/180-degree
+   rotations or left<->right flips are ever used because they would turn a crater into a mound.
 
-1. **Illumination normalization** — each image is rotated by `-sun_azimuth_angle`
-   (padded and reflected first so no black corners are introduced, then cropped back
-   to the original size), applied identically at training and inference time.
-2. **Transfer learning** — a pretrained CNN backbone (EfficientNetV2, via `timm`) is
-   fine-tuned on the normalized images, with the single grayscale channel replicated
-   to three channels to match the pretrained input format.
-3. **Class-balanced training** — a weighted loss function and balanced-accuracy-based
-   checkpointing correct for any skew between the two classes, rather than optimizing
-   for raw accuracy.
-4. **Cross-validation** — stratified k-fold training gives a much more trustworthy
-   estimate of real-world performance than a single train/validation split, and the
-   resulting fold models double as a free ensemble.
-5. **Test-time augmentation** — predictions are averaged across several
-   label-preserving views (flips, rotations) of each test image to reduce variance.
-6. **Validated output** — the final predictions file is checked in code (correct row
-   count, columns, value range, and exact match against the test set) before being
-   written, to catch formatting mistakes before submission.
+## Model
+ImageNet-21k-pretrained EfficientNetV2-S (`timm`), 320 px, class-weighted focal loss with label smoothing, AdamW (10x LR on the head), warm-up + cosine LR,
+EMA weights, stochastic depth, gradient clipping, mixed precision. 5-fold stratified CV; model selection by balanced accuracy.
+Test predictions = mean of the 5 fold models (with physics-safe TTA); the decision threshold is tuned on out-of-fold predictions only.
 
-## Repo contents
-
-| File | Description |
+## Repository layout
+| file | purpose |
 |---|---|
-| `Pareidolia_Paradox_Solution.ipynb` | End-to-end Google Colab notebook: data loading, preprocessing, training, inference, and submission generation. |
-| `submission.csv` | Final predictions (`image_id,label`) for the evaluation set, produced by the notebook. |
-| `model_fold*.pt` | PyTorch checkpoints, one per cross-validation fold. |
-| `best_model_weights.h5` | HDF5 export of the best-performing fold's weights. |
+| `physics.py` | rotation normalisation, light-direction probe, input construction (numpy/OpenCV only) |
+| `common.py` | data loading, model, training loop, K-fold, inference helpers |
+| `train.py` | full training pipeline (probe -> mode selection -> K-fold -> OOF score) |
+| `inference.py` | builds `submission.csv` from trained weights |
+| `requirements.txt` | dependencies |
 
-## Getting started
+## Usage
+```bash
+pip install -r requirements.txt
 
-The notebook is written for **Google Colab** with a GPU runtime, and expects the
-dataset to be available in a connected Google Drive folder.
+# data folder must contain: train_images.zip, test_images.zip, train_metadata.csv, test_metadata.csv
+python train.py --data_dir /path/to/data --out_dir ./outputs          # ~1-2 h on a T4 (5 folds)
+python inference.py --data_dir /path/to/data --weights_dir ./outputs --out submission.csv
+```
+Useful flags: `--mode {auto,spec,opp,dual,routed}`, `--img_size 384`, `--epochs`, `--backbone convnext_tiny.fb_in22k_ft_in1k --run_name convnext`.
+Training resumes automatically after an interruption (finished folds are skipped).
 
-1. Open `Pareidolia_Paradox_Solution.ipynb` in Colab.
-2. Set **Runtime → Change runtime type → GPU**.
-3. Make sure your Drive contains the four dataset files (two image archives, two
-   metadata CSVs) in one folder, and update the folder path in the config cell if
-   yours differs from the default.
-4. Run the notebook top to bottom. Training time scales with the number of
-   cross-validation folds and epochs configured at the top of the notebook — both
-   are exposed as simple settings you can reduce if you're short on GPU time.
-5. The final `submission.csv` and model weight files are written back to the same
-   Drive folder.
+## Model weights
+Download (Anyone with the link can view): **<PASTE GOOGLE DRIVE / HUGGING FACE / KAGGLE LINK HERE>**
+Place the files (`pipeline_config.json`, `model_effv2s_fold0..4.pt`) in `./outputs` and run `inference.py`.
 
-No dataset is included in this repository — you'll need to supply your own
-images and metadata in the same format (`image_id`, `label`, `sun_azimuth_angle`
-columns) to reproduce or adapt this pipeline.
-
-## Method summary (for the curious)
-
-- **Backbone:** EfficientNetV2-S, ImageNet-pretrained, fine-tuned end-to-end.
-- **Validation:** 5-fold stratified cross-validation.
-- **Loss:** class-weighted cross-entropy with light label smoothing.
-- **Optimizer/schedule:** AdamW with cosine-annealing warm restarts, mixed-precision
-  training.
-- **Metric:** balanced accuracy (mean recall across both classes), used for both
-  checkpoint selection and reporting.
-- **Inference:** 4-view test-time augmentation, averaged across all cross-validation
-  folds.
-
-## License
-
-Add a license of your choice (e.g. MIT) if you intend for others to reuse this code.
-
-## Acknowledgments
-
-Built for a computer vision hackathon challenge on lunar surface feature
-classification. Thanks to the organizers for an interesting problem — and to the
-moon, for holding still long enough to be photographed.
+## Submission format
+`submission.csv` has exactly 2,000 rows plus the header `image_id,label`, labels in {0, 1}, no nulls (validated in `make_submission`).
